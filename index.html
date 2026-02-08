@@ -3,6 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
     <title>Panda Poop Flappy</title>
     <style>
         body {
@@ -13,16 +14,30 @@
             align-items: center;
             height: 100vh;
             position: relative;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            overflow: hidden;
         }
         
         canvas {
             background: linear-gradient(#cceeff, #e6f7ff);
             border: 3px solid #222;
+            /* display will be sized via JS to keep internal frame (400x600) unchanged */
+            width: 400px;
+            /* fallback before JS runs */
+            height: 600px;
+            /* fallback before JS runs */
+            touch-action: manipulation;
+            /* improve touch responsiveness */
         }
         
         #restartBtn {
             position: absolute;
             top: 65%;
+            left: 50%;
+            transform: translateX(-50%);
             padding: 12px 28px;
             font-size: 18px;
             background: #222;
@@ -31,6 +46,7 @@
             border-radius: 8px;
             cursor: pointer;
             display: none;
+            z-index: 10;
         }
     </style>
 </head>
@@ -45,6 +61,10 @@
         const ctx = canvas.getContext("2d");
         const restartBtn = document.getElementById("restartBtn");
 
+        // Keep a fixed internal game size (do NOT change these).
+        const GAME_W = 400;
+        const GAME_H = 600;
+
         /* ---------- GAME STATE ---------- */
         let panda, pipes, poops, splats, frame, gameOver, score;
 
@@ -53,19 +73,51 @@
 
         /* ---------- AUDIO ---------- */
         const audioCtx = new(window.AudioContext || window.webkitAudioContext)();
+        let audioUnlocked = false;
+
+        function unlockAudio() {
+            if (audioUnlocked) return;
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume().then(() => {
+                    audioUnlocked = true;
+                });
+            } else {
+                audioUnlocked = true;
+            }
+            // remove the first-interaction listeners once unlocked
+            document.removeEventListener('pointerdown', unlockAudio);
+            document.removeEventListener('touchstart', unlockAudio);
+        }
 
         function fartSound() {
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = "sawtooth";
-            osc.frequency.setValueAtTime(90, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.25);
-            osc.stop(audioCtx.currentTime + 0.3);
+            if (!audioUnlocked) return;
+            // Simple fart sound using oscillator
+            const o = audioCtx.createOscillator();
+            const g = audioCtx.createGain();
+            o.type = 'sawtooth';
+            o.frequency.setValueAtTime(90, audioCtx.currentTime);
+            o.frequency.linearRampToValueAtTime(40, audioCtx.currentTime + 0.18);
+            g.gain.setValueAtTime(0.18, audioCtx.currentTime);
+            g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.18);
+            o.connect(g).connect(audioCtx.destination);
+            o.start();
+            o.stop(audioCtx.currentTime + 0.18);
         }
+
+        // Ensure mobile/responsive display: scale the CSS size of the canvas
+        function resizeCanvasStyle() {
+            // compute a scale that fits within the viewport while preserving aspect ratio
+            const vw = window.innerWidth;
+            const vh = window.innerHeight;
+            const scale = Math.min((vw * 0.95) / GAME_W, (vh * 0.9) / GAME_H);
+            const displayW = Math.round(GAME_W * Math.max(0.4, scale));
+            const displayH = Math.round(GAME_H * Math.max(0.4, scale));
+            canvas.style.width = displayW + 'px';
+            canvas.style.height = displayH + 'px';
+        }
+
+        // attach resize handler
+        window.addEventListener('resize', resizeCanvasStyle);
 
         /* ---------- INIT ---------- */
         function init() {
@@ -81,6 +133,9 @@
             score = 0;
             gameOver = false;
             restartBtn.style.display = "none";
+
+            // ensure canvas is displayed correctly on start
+            resizeCanvasStyle();
         }
         init();
 
@@ -100,13 +155,37 @@
             dropPoop();
         }
 
+        // unlock audio on first user interaction (required on many mobile browsers)
+        document.addEventListener('pointerdown', unlockAudio, {
+            once: true
+        });
+        document.addEventListener('touchstart', unlockAudio, {
+            once: true
+        });
+
         document.addEventListener("keydown", e => {
             if (e.code === "Space") jump();
         });
 
         canvas.addEventListener("click", jump);
 
-        // Right click = extra poop 💩
+        // Touch controls:
+        // - single-finger tap => jump
+        // - multi-finger (2+) touch => dropPoop
+        canvas.addEventListener('touchstart', e => {
+            // prevent scrolling/zooming while interacting with the game
+            e.preventDefault();
+            if (gameOver) return;
+            if (e.touches && e.touches.length > 1) {
+                dropPoop();
+            } else {
+                jump();
+            }
+        }, {
+            passive: false
+        });
+
+        // Right click = extra poop 💩 (desktop)
         canvas.addEventListener("contextmenu", e => {
             e.preventDefault();
             if (!gameOver) dropPoop();
@@ -132,6 +211,7 @@
 
         /* ---------- DRAW PANDA ---------- */
         function drawPanda() {
+            ctx.save();
             ctx.fillStyle = "white";
             ctx.beginPath();
             ctx.ellipse(panda.x, panda.y, 22, 26, 0, 0, Math.PI * 2);
@@ -158,6 +238,18 @@
             ctx.arc(panda.x - 8, panda.y - 6, 2, 0, Math.PI * 2);
             ctx.arc(panda.x + 8, panda.y - 6, 2, 0, Math.PI * 2);
             ctx.fill();
+
+            // Draw poop if dropping (show a poop under panda if recently dropped)
+            if (poops.length > 0) {
+                const lastPoop = poops[poops.length - 1];
+                if (lastPoop && Math.abs(lastPoop.x - (panda.x - 10)) < 5 && Math.abs(lastPoop.y - (panda.y + 35)) < 20) {
+                    ctx.fillStyle = "#6b3e26";
+                    ctx.beginPath();
+                    ctx.arc(panda.x, panda.y + 35, 8, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            }
+            ctx.restore();
         }
 
         /* ---------- POOP + BONUS ---------- */
