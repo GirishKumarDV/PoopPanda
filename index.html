@@ -84,10 +84,11 @@
             } else {
                 audioUnlocked = true;
             }
-            // remove the first-interaction listeners once unlocked
-            document.removeEventListener('pointerdown', unlockAudio);
-            document.removeEventListener('touchstart', unlockAudio);
         }
+
+        // Ensure audio context is resumed on every interaction (not just once)
+        document.addEventListener('pointerdown', unlockAudio);
+        document.addEventListener('touchstart', unlockAudio);
 
         function fartSound() {
             if (!audioUnlocked) return;
@@ -104,16 +105,33 @@
             o.stop(audioCtx.currentTime + 0.18);
         }
 
-        // Ensure mobile/responsive display: scale the CSS size of the canvas
+        // Ensure mobile/responsive display: scale the CSS size of the canvas and prevent zooming
         function resizeCanvasStyle() {
-            // compute a scale that fits within the viewport while preserving aspect ratio
+            // Use 100vw/100vh minus some margin for mobile, keep aspect ratio
             const vw = window.innerWidth;
             const vh = window.innerHeight;
-            const scale = Math.min((vw * 0.95) / GAME_W, (vh * 0.9) / GAME_H);
-            const displayW = Math.round(GAME_W * Math.max(0.4, scale));
-            const displayH = Math.round(GAME_H * Math.max(0.4, scale));
+            const aspect = GAME_W / GAME_H;
+            let displayW, displayH;
+            if (vw / vh > aspect) {
+                // viewport is wider than game, fit height
+                displayH = Math.max(320, Math.floor(vh * 0.98));
+                displayW = Math.floor(displayH * aspect);
+            } else {
+                // viewport is taller than game, fit width
+                displayW = Math.max(220, Math.floor(vw * 0.98));
+                displayH = Math.floor(displayW / aspect);
+            }
             canvas.style.width = displayW + 'px';
             canvas.style.height = displayH + 'px';
+            canvas.style.maxWidth = '100vw';
+            canvas.style.maxHeight = '100vh';
+            canvas.style.display = 'block';
+            canvas.style.margin = 'auto';
+            // Center the canvas absolutely for mobile
+            canvas.style.position = 'absolute';
+            canvas.style.top = '50%';
+            canvas.style.left = '50%';
+            canvas.style.transform = 'translate(-50%, -50%)';
         }
 
         // attach resize handler
@@ -155,14 +173,6 @@
             dropPoop();
         }
 
-        // unlock audio on first user interaction (required on many mobile browsers)
-        document.addEventListener('pointerdown', unlockAudio, {
-            once: true
-        });
-        document.addEventListener('touchstart', unlockAudio, {
-            once: true
-        });
-
         document.addEventListener("keydown", e => {
             if (e.code === "Space") jump();
         });
@@ -172,8 +182,7 @@
         // Touch controls:
         // - single-finger tap => jump
         // - multi-finger (2+) touch => dropPoop
-        canvas.addEventListener('touchstart', e => {
-            // prevent scrolling/zooming while interacting with the game
+        canvas.addEventListener('touchstart', function(e) {
             e.preventDefault();
             if (gameOver) return;
             if (e.touches && e.touches.length > 1) {
@@ -181,6 +190,13 @@
             } else {
                 jump();
             }
+        }, {
+            passive: false
+        });
+
+        // Prevent double-tap zoom on mobile browsers
+        canvas.addEventListener('touchend', function(e) {
+            e.preventDefault();
         }, {
             passive: false
         });
